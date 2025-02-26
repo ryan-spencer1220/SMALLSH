@@ -1,0 +1,2 @@
+compile: gcc --std=gnu99 -o smallsh *.c
+run: ./smallsh
