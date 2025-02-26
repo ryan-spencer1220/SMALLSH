@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <signal.h>
 #include <sys/types.h>
+#include <sys/wait.h> 
 
 #define INPUT_LENGTH 2048
 #define MAX_ARGS 512
@@ -58,32 +59,52 @@ void status_command()
 
 void other_command(struct command_line *curr_command)
 {
+    int childStatus;
+    pid_t spawnPid = fork();
+
+    switch (spawnPid) {
+        case -1:
+            perror("fork() failed");
+            exit(1);
+            break;
+        case 0:
+            // Child process
+            printf("CHILD(%d) executing command: %s\n", getpid(), curr_command->argv[0]);
+            curr_command->argv[curr_command->argc] = NULL;  // Ensure NULL termination
+
+            // Execute the command
+            execvp(curr_command->argv[0], curr_command->argv);
+
+            // If execvp fails, print an error and exit
+            perror("execvp");
+            exit(2);
+            break;
+        default:
+            // Parent process
+            spawnPid = waitpid(spawnPid, &childStatus, 0);
+            printf("PARENT(%d): child(%d) terminated.\n", getpid(), spawnPid);
+            break;
+    }
 }
 
 void execute_command(struct command_line *curr_command)
 {
-  char *newargv[] = { "/bin/ls", "-al", NULL };
-  int childStatus;
-
-  pid_t spawnPid = fork();
-
-  switch(spawnPid){
-  case -1:
-    perror("fork()\n");
-    exit(1);
-    break;
-  case 0:
-    printf("CHILD(%d) running ls command\n", getpid());
-    execv(newargv[0], newargv);
-    perror("execve");
-    exit(2);
-    break;
-  default:
-    spawnPid = waitpid(spawnPid, &childStatus, 0);
-    printf("PARENT(%d): child(%d) terminated. Now parent is exiting\n", getpid(), spawnPid);
-    exit(0);
-    break;
-  } 
+    if (strcmp(curr_command->argv[0], "exit") == 0)
+    {
+        exit_command();
+    }
+    else if (strcmp(curr_command->argv[0], "cd") == 0)
+    {
+        cd_command(curr_command);
+    }
+    else if (strcmp(curr_command->argv[0], "status") == 0)
+    {
+        status_command();
+    }
+    else
+    {
+        other_command(curr_command);
+    }
 }
 
 struct command_line *parse_input()
