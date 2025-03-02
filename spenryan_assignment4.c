@@ -1,11 +1,11 @@
-#include <stdio.h>      // For printf, fflush
-#include <stdlib.h>     // For exit, malloc, free
-#include <unistd.h>     // For fork, execvp, getcwd, chdir, sleep
-#include <sys/types.h>  // For pid_t
-#include <sys/wait.h>   // For waitpid
-#include <fcntl.h>      // For open, close, O_RDONLY, O_WRONLY
-#include <signal.h>     // For signal handling
-#include <stdbool.h>    // For boolean values (true, false)
+#include <stdio.h>     
+#include <stdlib.h>     
+#include <unistd.h> 
+#include <sys/types.h> 
+#include <sys/wait.h>
+#include <fcntl.h> 
+#include <signal.h>
+#include <stdbool.h>
 #include <string.h> 
 #define _GNU_SOURCE
 
@@ -31,35 +31,42 @@ void handle_SIGINT(int signo)
     fflush(stdout);
 }
 
-void handle_SIGTSTP(int signo)
-{
-    if (!foreground_only) {
-        foreground_only = true;
-        printf("\nEntering foreground-only mode (& is now ignored)\n");
-    } else {
-        foreground_only = false;
-        printf("\nExiting foreground-only mode\n");
-    }
-    fflush(stdout);
+void handle_SIGTSTP(int signo) {
+  if (!foreground_only) {
+      foreground_only = true;
+      write(STDOUT_FILENO, "\nEntering foreground-only mode (& is now ignored)\n", 50);
+  } else {
+      foreground_only = false;
+      write(STDOUT_FILENO, "\nExiting foreground-only mode\n", 30);
+  }
 }
 
-void check_background_processes()
-{
-    int childStatus;
-    pid_t bg_pid;
-    while ((bg_pid = waitpid(-1, &childStatus, WNOHANG)) > 0) {
-        printf("background pid %d is done: ", bg_pid);
-        if (WIFEXITED(childStatus)) {
-            printf("exit value %d\n", WEXITSTATUS(childStatus));
-        } else if (WIFSIGNALED(childStatus)) {
-            printf("terminated by signal %d\n", WTERMSIG(childStatus));
-        }
-    }
+void check_background_processes() {
+  int childStatus;
+  pid_t bg_pid;
+  
+  while ((bg_pid = waitpid(-1, &childStatus, WNOHANG)) > 0) {
+      printf("background pid %d is done: ", bg_pid);
+      
+      if (WIFEXITED(childStatus)) {
+          printf("exit value %d\n", WEXITSTATUS(childStatus));
+      } else if (WIFSIGNALED(childStatus)) {
+          printf("terminated by signal %d\n", WTERMSIG(childStatus));
+      }
+      fflush(stdout);
+
+      for (int i = 0; i < MAX_ARGS; i++) {
+          if (pid_array[i] == bg_pid) {
+              pid_array[i] = 0;
+              break;
+          }
+      }
+  }
 }
+
 
 void exit_command()
 {
-    // Kill all background processes before exiting
     for (int i = 0; i < MAX_ARGS; i++) {
         if (pid_array[i] > 0) {
             kill(pid_array[i], SIGTERM);
@@ -89,57 +96,65 @@ void status_command()
     }
 }
 
-void other_command(struct command_line *curr_command)
-{
-    int childStatus;
-    pid_t spawnPid = fork();
+void other_command(struct command_line *curr_command) {
+  int childStatus;
+  pid_t spawnPid = fork();
 
-    switch (spawnPid) {
-        case -1:
-            perror("fork() failed");
-            exit(1);
-            break;
-        case 0:
-            // CHILD PROCESS
-            curr_command->argv[curr_command->argc] = NULL;  // Ensure NULL termination
+  switch (spawnPid) {
+      case -1:
+          perror("fork() failed");
+          exit(1);
+          break;
+      case 0:
+          curr_command->argv[curr_command->argc] = NULL;
 
-            // Handle Input Redirection
-            if (curr_command->input_file) {
-                int input_fd = open(curr_command->input_file, O_RDONLY);
-                if (input_fd == -1) {
-                    perror("cannot open badfile for input\n");
-                    exit(1);
-                }
-                dup2(input_fd, STDIN_FILENO);
-                close(input_fd);
-            }
+          if (curr_command->input_file) {
+              int input_fd = open(curr_command->input_file, O_RDONLY);
+              if (input_fd == -1) {
+                  perror("cannot open badfile for input\n");
+                  exit(1);
+              }
+              dup2(input_fd, STDIN_FILENO);
+              close(input_fd);
+          }
 
-            // Handle Output Redirection
-            if (curr_command->output_file) {
-                int output_fd = open(curr_command->output_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-                if (output_fd == -1) {
-                    perror("cannot open output file");
-                    exit(1);
-                }
-                dup2(output_fd, STDOUT_FILENO);
-                close(output_fd);
-            }
+          if (curr_command->output_file) {
+              int output_fd = open(curr_command->output_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+              if (output_fd == -1) {
+                  perror("cannot open output file");
+                  exit(1);
+              }
+              dup2(output_fd, STDOUT_FILENO);
+              close(output_fd);
+          }
 
-            // Execute command
-            execvp(curr_command->argv[0], curr_command->argv);
-            perror("execvp failed");
-            exit(2);
-            break;
+          execvp(curr_command->argv[0], curr_command->argv);
+          perror("execvp failed");
+          exit(2);
+          break;
 
-        default:
-            // PARENT PROCESS
-            if (!curr_command->is_bg) {
-                waitpid(spawnPid, &childStatus, 0);
-            } else {
-                printf("background pid is %d\n", spawnPid);
-            }
-            break;
-    }
+      default:
+          if (!curr_command->is_bg) {
+              waitpid(spawnPid, &childStatus, 0);
+              if (WIFEXITED(childStatus)) {
+                  last_exit_status = WEXITSTATUS(childStatus);
+              } else if (WIFSIGNALED(childStatus)) {
+                  last_exit_status = WTERMSIG(childStatus);
+                  printf("terminated by signal %d\n", last_exit_status);
+                  fflush(stdout);
+              }
+          } else {
+              printf("background pid is %d\n", spawnPid);
+              fflush(stdout);
+              for (int i = 0; i < MAX_ARGS; i++) {
+                  if (pid_array[i] == 0) {
+                      pid_array[i] = spawnPid;
+                      break;
+                  }
+              }
+          }
+          break;
+  }
 }
 
 
@@ -163,81 +178,74 @@ void execute_command(struct command_line *curr_command)
     }
 }
 
-struct command_line *parse_input()
-{
-    char input[INPUT_LENGTH];
-    struct command_line *curr_command = (struct command_line *)calloc(1, sizeof(struct command_line));
+struct command_line *parse_input() {
+  char input[INPUT_LENGTH];
+  struct command_line *curr_command = (struct command_line *)calloc(1, sizeof(struct command_line));
 
-    // Get input
-    printf(": ");
-    fflush(stdout);
-    fgets(input, INPUT_LENGTH, stdin);
+  printf(": ");
+  fflush(stdout);
+  
+  if (!fgets(input, INPUT_LENGTH, stdin)) {
+      free(curr_command);
+      return NULL;
+  }
 
-    if (!strcmp(input, "#")){
-      curr_command = NULL;
-      return curr_command;
-    }
+  // Trim leading spaces
+  char *trimmed_input = input;
+  while (*trimmed_input == ' ' || *trimmed_input == '\t') {
+      trimmed_input++;
+  }
 
-    // Tokenize the input
-    char *token = strtok(input, " \n");
-    while (token)
-    {
-        if (!strcmp(token, "<"))
-        {
-            curr_command->input_file = strdup(strtok(NULL, " \n"));
-        }
-        else if (!strcmp(token, ">"))
-        {
-            curr_command->output_file = strdup(strtok(NULL, " \n"));
-        }
-        else if (!strcmp(token, "&"))
-        {
-            if (!foreground_only) {
-                curr_command->is_bg = true;
-            }
-        }
-        else
-        {
-            curr_command->argv[curr_command->argc++] = strdup(token);
-        }
-        token = strtok(NULL, " \n");
-    }
-    curr_command->argv[curr_command->argc] = NULL;
-    return curr_command;
+  // Ignore empty lines or commented lines
+  if (trimmed_input[0] == '\0' || trimmed_input[0] == '\n' || trimmed_input[0] == '#') {
+    free(curr_command);
+    return NULL;
+  }
+
+  char *token = strtok(input, " \n");
+  while (token) {
+      if (!strcmp(token, "<")) {
+          curr_command->input_file = strdup(strtok(NULL, " \n"));
+      } else if (!strcmp(token, ">")) {
+          curr_command->output_file = strdup(strtok(NULL, " \n"));
+      } else if (!strcmp(token, "&")) {
+          if (!foreground_only) {
+              curr_command->is_bg = true;
+          }
+      } else {
+          curr_command->argv[curr_command->argc++] = strdup(token);
+      }
+      token = strtok(NULL, " \n");
+  }
+  curr_command->argv[curr_command->argc] = NULL;
+  return curr_command;
 }
 
-int main()
-{
-    struct command_line *curr_command;
-    struct sigaction SIGINT_action = {0}, SIGTSTP_action = {0};
 
-    // Ignore SIGINT by default (only foreground processes should handle it)
-    SIGINT_action.sa_handler = handle_SIGINT;
-    sigfillset(&SIGINT_action.sa_mask);
-    SIGINT_action.sa_flags = SA_RESTART;
-    sigaction(SIGINT, &SIGINT_action, NULL);
+int main() {
+  struct command_line *curr_command;
+  struct sigaction SIGINT_action = {0}, SIGTSTP_action = {0};
 
-    // Handle SIGTSTP to toggle foreground-only mode
-    SIGTSTP_action.sa_handler = handle_SIGTSTP;
-    sigfillset(&SIGTSTP_action.sa_mask);
-    SIGTSTP_action.sa_flags = SA_RESTART;
-    sigaction(SIGTSTP, &SIGTSTP_action, NULL);
+  SIGINT_action.sa_handler = handle_SIGINT;
+  sigfillset(&SIGINT_action.sa_mask);
+  SIGINT_action.sa_flags = SA_RESTART;
+  sigaction(SIGINT, &SIGINT_action, NULL);
 
-    while (true)
-    {
-        curr_command = parse_input();
-        if (curr_command == NULL) 
-        {
-            continue; // Ignore empty input
-        } 
-        else 
-        {
-          execute_command(curr_command);
-          check_background_processes();
-          free(curr_command);
-        }
+  SIGTSTP_action.sa_handler = handle_SIGTSTP;
+  sigfillset(&SIGTSTP_action.sa_mask);
+  SIGTSTP_action.sa_flags = SA_RESTART;
+  sigaction(SIGTSTP, &SIGTSTP_action, NULL);
 
+  while (true) {
+    check_background_processes();
+    curr_command = parse_input();
+    if (curr_command == NULL) {
+        continue;
     }
-    
-    return EXIT_SUCCESS;
+
+    execute_command(curr_command);
+    free(curr_command);
+}
+
+  return EXIT_SUCCESS;
 }
